@@ -36,10 +36,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================================
-# 2. INIT FIREBASE
+# 2. INIT FIREBASE (DATABASE PRODUKSI)
 # ==========================================================
-NAMA_DATABASE = 'uji_coba_rak'
-DB_LOG_MUTASI = 'log_mutasi_rak'
+NAMA_DATABASE = 'gudang_hdi_utama'
+DB_LOG_MUTASI = 'log_mutasi_hdi_utama'
 
 if not firebase_admin._apps:
     cred = credentials.Certificate(dict(st.secrets["firebase"]))
@@ -195,14 +195,17 @@ elif st.session_state.mode == 'INBOUND':
         
         p_cols = st.columns(4)
         for i in range(1, 29): # Rak 1-28
-            # Hitung isi rak
-            isi_rak = len([d for d in all_k_data if float(d.get('Baris', 0)) == float(i) and str(d.get('Part Number', '')).strip() != ''])
+            # Hitung isi rak dan variasi SKU
+            data_baris = [d for d in all_k_data if float(d.get('Baris', 0)) == float(i) and str(d.get('Part Number', '')).strip() != '']
+            isi_rak = len(data_baris)
+            sku_rak = len(set([str(d.get('Part Number', '')).strip().upper() for d in data_baris]))
             
             # CSS Class dinamis
             css_class = ""
             if isi_rak == 0: css_class = "rak-hijau"
-            elif isi_rak >= 31: css_class = "rak-merah" # Asumsi penuh
-            else: css_class = "rak-kuning"
+            elif sku_rak == 1: css_class = "rak-hijau"
+            elif sku_rak == 2: css_class = "rak-kuning"
+            else: css_class = "rak-merah"
             
             label_btn = f"Rak {i}\n({isi_rak} Terisi)" if isi_rak > 0 else f"Rak {i}\n(KOSONG)"
             
