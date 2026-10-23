@@ -11,25 +11,28 @@ st.markdown("""
 <style>
     div.stButton > button { min-height: 80px !important; font-size: clamp(14px, 2vw, 20px) !important; font-weight: 900 !important; border-radius: 12px !important; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); white-space: normal !important; line-height: 1.2 !important; }
     .btn-tambah > div > button { background-color: #dcfce7 !important; border: 2px solid #22c55e !important; color: #166534 !important; }
+    .btn-kurang > div > button { background-color: #ffedd5 !important; border: 2px solid #f97316 !important; color: #9a3412 !important; }
     .btn-batal > div > button { background-color: #f1f5f9 !important; border: 2px solid #cbd5e1 !important; color: #475569 !important; }
+    .btn-pindah > div > button { background-color: #e0f2fe !important; border: 2px solid #0ea5e9 !important; color: #075985 !important; }
+    .rak-info > div > button { background-color: #f8fafc !important; border-color: #94a3b8 !important; color: #334155 !important; }
     .rak-hijau > div > button { background-color: #dcfce7 !important; border-color: #22c55e !important; color: #166534 !important; }
     .rak-kuning > div > button { background-color: #fef08a !important; border-color: #eab308 !important; color: #854d0e !important; }
     .rak-merah > div > button { background-color: #fee2e2 !important; border-color: #ef4444 !important; color: #991b1b !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# 1. INISIALISASI STATE (Wajib di atas)
+# 1. INISIALISASI STATE
 if 'init_done' not in st.session_state:
     st.session_state.update({
-        'init_done': True, 'mode': 'HOME', 'jenis_tugas': '', 'arah': '',
-        'kolom': '', 'baris': 0, 'produk': '', 'part_num': '', 'lot': '',
-        'qty': 1, 'step': 1
+        'init_done': True, 'mode': 'HOME', 'jenis_tugas': '', 'arah': '', 'kolom': '', 
+        'baris': 1, 'produk': '', 'part_num': '', 'lot': '', 'lot_pilih': '', 
+        'sisa_aktual': '', 'status_sisa': '', 'qty': 1, 'step': 1
     })
 
 def reset_state():
-    st.session_state.update({'mode': 'HOME', 'jenis_tugas': '', 'arah': '', 'kolom': '', 'baris': 0, 'produk': '', 'part_num': '', 'lot': '', 'qty': 1, 'step': 1})
+    st.session_state.update({'mode': 'HOME', 'jenis_tugas': '', 'arah': '', 'kolom': '', 'baris': 1, 'produk': '', 'part_num': '', 'lot': '', 'lot_pilih': '', 'sisa_aktual': '', 'status_sisa': '', 'qty': 1, 'step': 1})
 
-# 2. SAFE BOOT FIREBASE (Cache Resource)
+# 2. SAFE BOOT FIREBASE
 NAMA_DATABASE = 'gudang_hdi_utama'
 DB_LOG_MUTASI = 'log_mutasi_hdi_utama'
 
@@ -46,7 +49,6 @@ def init_firebase():
 db, db_status = init_firebase()
 if db is None:
     st.error("🚨 Gagal terhubung ke Firebase.")
-    st.info("Periksa menu 'Secrets' di pengaturan Streamlit Cloud. Pastikan format JSON sudah benar (format TOML).")
     st.code(db_status)
     st.stop()
 
@@ -89,20 +91,54 @@ def tx_simpan_inbound(transaction, doc_ref, b_pilih, arah, in_produk, in_part, i
             
     transaction.set(doc_ref, {'data': data_luar + baris_actual + new_records})
     db.collection(DB_LOG_MUTASI).add(log_data)
-    return True, "Sukses!"
+    return True, "Sukses disimpan!"
 
-# 3. UI LTI
+@firestore.transactional
+def tx_tarik_outbound(transaction, doc_ref, b_pilih, out_lot, out_qty, sisa_aktual, status_sisa, log_data, log_audit):
+    snapshot = doc_ref.get(transaction=transaction)
+    all_data = snapshot.to_dict().get('data', []) if snapshot.exists else []
+    
+    data_luar = [d for d in all_data if float(d.get('Baris', 0)) != float(b_pilih) or str(d.get('Part Number', '')).strip() == '']
+    baris_actual = [d for d in all_data if float(d.get('Baris', 0)) == float(b_pilih) and str(d.get('Part Number', '')).strip() != '']
+    
+    lot_matches = sorted([d for d in baris_actual if str(d.get('Lot Number', '')).strip() == str(out_lot).strip()], key=lambda x: float(x.get('Pallet Ke', 0)))
+    if len(lot_matches) < out_qty: return False, f"Stok Lot {out_lot} tidak cukup! Hanya ada {len(lot_matches)} pallet."
+    
+    pallets_to_remove = lot_matches[:out_qty]
+    baris_remaining = [d for d in baris_actual if d not in pallets_to_remove]
+    
+    transaction.set(doc_ref, {'data': data_luar + baris_remaining})
+    db.collection(DB_LOG_MUTASI).add(log_data)
+    
+    sistem_sisa = len(lot_matches) - out_qty
+    if sisa_aktual != "" and int(sisa_aktual) != sistem_sisa:
+        log_audit['Selisih'] = int(sisa_aktual) - sistem_sisa
+        db.collection(DB_LOG_MUTASI).add(log_audit)
+        
+    return True, "Barang berhasil ditarik!"
+
+# 3. UI LTI HOME
 if st.session_state.mode == 'HOME':
     st.markdown("<h2 style='text-align: center;'>📥 LTI (Lift Truck Inbound)</h2>", unsafe_allow_html=True)
     st.markdown('<div class="btn-tambah">', unsafe_allow_html=True)
     if st.button("📥 TUMPUK HASIL PRODUKSI", use_container_width=True):
-        st.session_state.update({'mode': 'INBOUND', 'jenis_tugas': 'INBOUND - Hasil Produksi', 'step': 1}); st.rerun()
+        st.session_state.update({'mode': 'TAMBAH', 'jenis_tugas': 'INBOUND - Hasil Produksi', 'step': 1}); st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+    
     st.write("")
-    if st.button("📥 KEMBALIKAN SISA TRUK (Retur)", use_container_width=True):
-        st.session_state.update({'mode': 'INBOUND', 'jenis_tugas': 'INBOUND - Retur Delivery', 'step': 1}); st.rerun()
+    st.markdown('<div class="btn-kurang">', unsafe_allow_html=True)
+    if st.button("📤 AMBIL WIP / BAHAN", use_container_width=True):
+        st.session_state.update({'mode': 'KURANG', 'jenis_tugas': 'OUTBOUND - Ambil WIP', 'step': 1}); st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.write("")
+    st.markdown('<div class="btn-pindah">', unsafe_allow_html=True)
+    if st.button("🔄 PINDAH LOKASI RAK", use_container_width=True):
+        st.toast("Modul Pindah Rak disiapkan di update berikutnya!", icon="🛠️")
     st.markdown('</div>', unsafe_allow_html=True)
 
-elif st.session_state.mode == 'INBOUND':
+# 4. WIZARD TAMBAH (INBOUND)
+elif st.session_state.mode == 'TAMBAH':
     st.progress(st.session_state.step / 5, text=f"{st.session_state.jenis_tugas} (Langkah {st.session_state.step}/5)")
     
     if st.session_state.step == 1:
@@ -164,9 +200,83 @@ elif st.session_state.mode == 'INBOUND':
         if st.button("🚀 SIMPAN", use_container_width=True):
             with st.spinner("Menyimpan..."):
                 doc_ref = db.collection(NAMA_DATABASE).document(f"Kolom_{st.session_state.kolom}")
-                log_mutasi_data = {"Waktu Transaksi": (datetime.utcnow() + timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S"), "Jenis Transaksi": st.session_state.jenis_tugas, "Lokasi Rak": f"{st.session_state.kolom}-{st.session_state.baris}", "Nama Produk": st.session_state.produk, "Part Number": st.session_state.part_num, "No Lot": st.session_state.lot if st.session_state.lot else "-", "Mutasi Pallet": float(st.session_state.qty), "Mutasi Pecahan (Dus/Sak)": 0.0, "Mutasi Eceran (Pcs)": 0.0, "Keterangan": "", "Kolom": st.session_state.kolom, "Timestamp_System": firestore.SERVER_TIMESTAMP}
+                ts = (datetime.utcnow() + timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S")
+                log_mutasi_data = {"Waktu Transaksi": ts, "Jenis Transaksi": st.session_state.jenis_tugas, "Lokasi Rak": f"{st.session_state.kolom}-{st.session_state.baris}", "Nama Produk": st.session_state.produk, "Part Number": st.session_state.part_num, "No Lot": st.session_state.lot if st.session_state.lot else "-", "Mutasi Pallet": float(st.session_state.qty), "Mutasi Pecahan (Dus/Sak)": 0.0, "Mutasi Eceran (Pcs)": 0.0, "Keterangan": "", "Kolom": st.session_state.kolom, "Timestamp_System": firestore.SERVER_TIMESTAMP}
                 sukses, pesan = tx_simpan_inbound(db.transaction(), doc_ref, st.session_state.baris, st.session_state.arah, st.session_state.produk, st.session_state.part_num, st.session_state.lot, st.session_state.qty, log_mutasi_data)
                 if sukses: st.toast('Tersimpan!', icon='✅'); time.sleep(1.5); reset_state(); st.rerun()
                 else: st.error(pesan)
         st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('<div class="btn-batal">', unsafe_allow_html=True); st.write(""); st.button("🔙 Kembali", on_click=lambda: st.session_state.update({'step': 4}), use_container_width=True); st.markdown('</div>', unsafe_allow_html=True)
+
+# 5. WIZARD KURANG (OUTBOUND)
+elif st.session_state.mode == 'KURANG':
+    st.progress(st.session_state.step / 4, text=f"{st.session_state.jenis_tugas} (Langkah {st.session_state.step}/4)")
+    
+    if st.session_state.step == 1:
+        st.header("1. Posisi Rak Asal")
+        c1, c2 = st.columns([1, 2])
+        with c1: kolom = st.selectbox("Blok", ['A', 'B', 'C', 'D', 'E', 'F', 'G'])
+        with c2: baris = st.number_input("Nomor Rak", min_value=1, max_value=28, value=1)
+            
+        st.markdown('<div class="btn-kurang">', unsafe_allow_html=True)
+        if st.button("CARI BARANG", use_container_width=True): st.session_state.update({'kolom': kolom, 'baris': baris, 'step': 2}); st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="btn-batal">', unsafe_allow_html=True); st.write(""); st.button("🔙 Batal", on_click=reset_state, use_container_width=True); st.markdown('</div>', unsafe_allow_html=True)
+
+    elif st.session_state.step == 2:
+        st.header(f"2. Pilih Lot di Rak {st.session_state.kolom}-{st.session_state.baris}")
+        doc = db.collection(NAMA_DATABASE).document(f"Kolom_{st.session_state.kolom}").get()
+        all_k_data = doc.to_dict().get('data', []) if doc.exists else []
+        baris_data = [d for d in all_k_data if float(d.get('Baris', 0)) == float(st.session_state.baris) and str(d.get('Part Number', '')).strip() != '']
+        
+        lot_counts = {}
+        for d in baris_data:
+            l = str(d.get('Lot Number', '-')).strip(); p = str(d.get('Nama Produk', '-')).strip()
+            lot_counts[(l, p)] = lot_counts.get((l, p), 0) + 1
+            
+        if not lot_counts: st.warning("Rak ini KOSONG di sistem!")
+        else:
+            st.markdown('<div class="rak-info">', unsafe_allow_html=True)
+            for (lot, prod), count in lot_counts.items():
+                if st.button(f"Lot: {lot}\n{prod}\n(Ada {count} Pallet)", use_container_width=True):
+                    st.session_state.update({'lot_pilih': lot, 'step': 3}); st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="btn-batal">', unsafe_allow_html=True); st.write(""); st.button("🔙 Kembali", on_click=lambda: st.session_state.update({'step': 1}), use_container_width=True); st.markdown('</div>', unsafe_allow_html=True)
+
+    elif st.session_state.step == 3:
+        st.header("3. Tarik & Audit Fisik")
+        st.info(f"Lot Terpilih: {st.session_state.lot_pilih}")
+        n1, n2, n3 = st.columns([1, 1.5, 1])
+        with n1:
+            if st.button("➖", use_container_width=True) and st.session_state.qty > 1: st.session_state.qty -= 1; st.rerun()
+        with n2: st.markdown(f"<h1 style='text-align: center; font-size: 50px; margin:0;'>{st.session_state.qty}</h1>", unsafe_allow_html=True)
+        with n3:
+            if st.button("➕", use_container_width=True): st.session_state.qty += 1; st.rerun()
+            
+        st.divider()
+        sisa_input = st.text_input("📝 (Opsional) Sisa Aktual Fisik Lot ini di Rak:", value=st.session_state.sisa_aktual)
+        
+        st.markdown('<div class="btn-kurang">', unsafe_allow_html=True)
+        if st.button("Lanjut ➡️", use_container_width=True): st.session_state.update({'sisa_aktual': sisa_input, 'step': 4}); st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="btn-batal">', unsafe_allow_html=True); st.write(""); st.button("🔙 Kembali", on_click=lambda: st.session_state.update({'step': 2}), use_container_width=True); st.markdown('</div>', unsafe_allow_html=True)
+
+    elif st.session_state.step == 4:
+        st.header("4. Status Barang")
+        status_input = st.radio("Bagaimana status sisa tarikan ini?", ["Semua Muat ke Truk", "Sisa dikembalikan ke rak ini", "Sisa ditaruh di luar rak"])
+        
+        st.markdown('<div class="btn-kurang">', unsafe_allow_html=True)
+        if st.button("🚀 EKSEKUSI OUTBOUND", use_container_width=True):
+            st.session_state.status_sisa = status_input
+            with st.spinner("Memotong stok..."):
+                doc_ref = db.collection(NAMA_DATABASE).document(f"Kolom_{st.session_state.kolom}")
+                ts = (datetime.utcnow() + timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S")
+                log_data = {"Waktu Transaksi": ts, "Jenis Transaksi": st.session_state.jenis_tugas, "Lokasi Rak": f"{st.session_state.kolom}-{st.session_state.baris}", "No Lot": st.session_state.lot_pilih, "Mutasi Pallet": -float(st.session_state.qty), "Keterangan": st.session_state.status_sisa, "Kolom": st.session_state.kolom, "Timestamp_System": firestore.SERVER_TIMESTAMP}
+                log_audit = {"Waktu Transaksi": ts, "Jenis Transaksi": "AUDIT SELISIH (OUTBOUND)", "Lokasi Rak": f"{st.session_state.kolom}-{st.session_state.baris}", "No Lot": st.session_state.lot_pilih, "Mutasi Pallet": 0.0, "Keterangan": "Terjadi selisih pelaporan fisik.", "Timestamp_System": firestore.SERVER_TIMESTAMP}
+                
+                sukses, pesan = tx_tarik_outbound(db.transaction(), doc_ref, st.session_state.baris, st.session_state.lot_pilih, st.session_state.qty, st.session_state.sisa_aktual, st.session_state.status_sisa, log_data, log_audit)
+                
+                if sukses: st.toast('Tarik Stok Berhasil!', icon='✅'); time.sleep(1.5); reset_state(); st.rerun()
+                else: st.error(pesan)
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="btn-batal">', unsafe_allow_html=True); st.write(""); st.button("🔙 Kembali", on_click=lambda: st.session_state.update({'step': 3}), use_container_width=True); st.markdown('</div>', unsafe_allow_html=True)
