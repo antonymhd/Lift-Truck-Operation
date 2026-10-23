@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 # ==========================================================
 st.set_page_config(
     page_title="WMS Master Control - PPIC",
-    page_icon="👑",
+    page_icon="📤",
     layout="wide"
 )
 
@@ -26,7 +26,7 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-st.title("👑 WMS Master Control & Override")
+st.title("📤 WMS Master Control & Override")
 st.caption(f"Akses Khusus Administrator PPIC. Terhubung ke database: {NAMA_DATABASE}")
 
 # --- CACHE: MASTER PRODUK UNTUK PERFORMA (1 JAM) ---
