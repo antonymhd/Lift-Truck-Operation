@@ -5,17 +5,14 @@ from firebase_admin import credentials, firestore
 from datetime import datetime, timedelta
 import time
 
-# ==========================================================
-# 1. KONFIGURASI LTI
-# ==========================================================
 st.set_page_config(page_title="LTI - Inbound", page_icon="📥", layout="centered")
 
 st.markdown("""
 <style>
     div.stButton > button { min-height: 80px !important; font-size: clamp(14px, 2vw, 20px) !important; font-weight: 900 !important; border-radius: 12px !important; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); white-space: normal !important; line-height: 1.2 !important; }
     .btn-tambah > div > button { background-color: #dcfce7 !important; border: 2px solid #22c55e !important; color: #166534 !important; }
-    .btn-pindah > div > button { background-color: #e0f2fe !important; border: 2px solid #0ea5e9 !important; color: #075985 !important; }
     .btn-batal > div > button { background-color: #f1f5f9 !important; border: 2px solid #cbd5e1 !important; color: #475569 !important; }
+    .btn-pindah > div > button { background-color: #e0f2fe !important; border: 2px solid #0ea5e9 !important; color: #075985 !important; }
     .rak-hijau > div > button { background-color: #dcfce7 !important; border-color: #22c55e !important; color: #166534 !important; }
     .rak-kuning > div > button { background-color: #fef08a !important; border-color: #eab308 !important; color: #854d0e !important; }
     .rak-merah > div > button { background-color: #fee2e2 !important; border-color: #ef4444 !important; color: #991b1b !important; }
@@ -25,10 +22,16 @@ st.markdown("""
 NAMA_DATABASE = 'gudang_hdi_utama'
 DB_LOG_MUTASI = 'log_mutasi_hdi_utama'
 
-if not firebase_admin._apps:
-    cred = credentials.Certificate(dict(st.secrets["firebase"]))
-    firebase_admin.initialize_app(cred)
-db = firestore.client()
+# Pengaman Layar Putih (Blank Screen)
+try:
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(dict(st.secrets["firebase"]))
+        firebase_admin.initialize_app(cred)
+    db = firestore.client()
+except Exception as e:
+    st.error("Gagal terhubung ke Firebase. Pastikan file secrets atau requirements.txt sudah benar.")
+    st.code(str(e))
+    st.stop()
 
 @st.cache_data(ttl=3600)
 def load_master_produk():
@@ -71,7 +74,6 @@ def tx_simpan_inbound(transaction, doc_ref, b_pilih, arah, in_produk, in_part, i
     db.collection(DB_LOG_MUTASI).add(log_data)
     return True, "Sukses!"
 
-# MANAJEMEN STATE
 for key in ['mode', 'jenis_tugas', 'arah', 'kolom', 'produk', 'part_num', 'lot']:
     if key not in st.session_state: st.session_state[key] = ""
 if 'step' not in st.session_state: st.session_state.step = 1
@@ -82,7 +84,6 @@ def reset_state():
     for key in ['mode', 'jenis_tugas', 'arah', 'kolom', 'produk', 'part_num', 'lot']: st.session_state[key] = ""
     st.session_state.step = 1; st.session_state.qty = 1; st.session_state.baris = 0; st.session_state.mode = 'HOME'
 
-# HOME LTI
 if st.session_state.mode == 'HOME':
     st.markdown("<h2 style='text-align: center;'>📥 LTI (Lift Truck Inbound)</h2>", unsafe_allow_html=True)
     st.markdown('<div class="btn-tambah">', unsafe_allow_html=True)
@@ -94,11 +95,10 @@ if st.session_state.mode == 'HOME':
     st.markdown('</div>', unsafe_allow_html=True)
     st.write("")
     st.markdown('<div class="btn-pindah">', unsafe_allow_html=True)
-    if st.button("🔄 PINDAH LOKASI RAK\n(Modul segera hadir)", use_container_width=True):
+    if st.button("🔄 PINDAH LOKASI RAK", use_container_width=True):
         st.toast("Modul Pindah Rak disiapkan di update berikutnya!", icon="🛠️")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# WIZARD INBOUND
 elif st.session_state.mode == 'INBOUND':
     st.progress(st.session_state.step / 5, text=f"{st.session_state.jenis_tugas} (Langkah {st.session_state.step}/5)")
     
