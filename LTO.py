@@ -16,18 +16,35 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# 1. INISIALISASI STATE
+if 'init_done' not in st.session_state:
+    st.session_state.update({
+        'init_done': True, 'mode': 'HOME', 'jenis_tugas': '', 'kolom': '', 
+        'baris': 1, 'lot_pilih': '', 'sisa_aktual': '', 'status_sisa': '', 
+        'qty': 1, 'step': 1
+    })
+
+def reset_state():
+    st.session_state.update({'mode': 'HOME', 'jenis_tugas': '', 'kolom': '', 'baris': 1, 'lot_pilih': '', 'sisa_aktual': '', 'status_sisa': '', 'qty': 1, 'step': 1})
+
+# 2. SAFE BOOT FIREBASE
 NAMA_DATABASE = 'gudang_hdi_utama'
 DB_LOG_MUTASI = 'log_mutasi_hdi_utama'
 
-# Pengaman Layar Putih (Blank Screen)
-try:
-    if not firebase_admin._apps:
-        cred = credentials.Certificate(dict(st.secrets["firebase"]))
-        firebase_admin.initialize_app(cred)
-    db = firestore.client()
-except Exception as e:
-    st.error("Gagal terhubung ke Firebase. Pastikan file secrets atau requirements.txt sudah benar.")
-    st.code(str(e))
+@st.cache_resource
+def init_firebase():
+    try:
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(dict(st.secrets["firebase"]))
+            firebase_admin.initialize_app(cred)
+        return firestore.client(), "OK"
+    except Exception as e:
+        return None, str(e)
+
+db, db_status = init_firebase()
+if db is None:
+    st.error("🚨 Gagal terhubung ke Firebase.")
+    st.code(db_status)
     st.stop()
 
 @firestore.transactional
@@ -54,24 +71,15 @@ def tx_tarik_outbound(transaction, doc_ref, b_pilih, out_lot, out_qty, sisa_aktu
         
     return True, "Barang berhasil ditarik!"
 
-for key in ['mode', 'jenis_tugas', 'kolom', 'lot_pilih', 'sisa_aktual', 'status_sisa']:
-    if key not in st.session_state: st.session_state[key] = ""
-if 'step' not in st.session_state: st.session_state.step = 1
-if 'baris' not in st.session_state: st.session_state.baris = 0
-if 'qty' not in st.session_state: st.session_state.qty = 1
-
-def reset_state():
-    for key in ['mode', 'jenis_tugas', 'kolom', 'lot_pilih', 'sisa_aktual', 'status_sisa']: st.session_state[key] = ""
-    st.session_state.step = 1; st.session_state.qty = 1; st.session_state.baris = 0; st.session_state.mode = 'HOME'
-
+# 3. UI LTO
 if st.session_state.mode == 'HOME':
     st.markdown("<h2 style='text-align: center;'>📤 LTO (Lift Truck Outbound)</h2>", unsafe_allow_html=True)
     st.markdown('<div class="btn-kurang">', unsafe_allow_html=True)
     if st.button("📤 AMBIL BARANG DELIVERY", use_container_width=True):
-        st.session_state.mode = 'OUTBOUND'; st.session_state.jenis_tugas = 'OUTBOUND - Delivery'; st.rerun()
+        st.session_state.update({'mode': 'OUTBOUND', 'jenis_tugas': 'OUTBOUND - Delivery', 'step': 1}); st.rerun()
     st.write("")
     if st.button("📤 AMBIL WIP / BAHAN", use_container_width=True):
-        st.session_state.mode = 'OUTBOUND'; st.session_state.jenis_tugas = 'OUTBOUND - Ambil WIP'; st.rerun()
+        st.session_state.update({'mode': 'OUTBOUND', 'jenis_tugas': 'OUTBOUND - Ambil WIP', 'step': 1}); st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
 elif st.session_state.mode == 'OUTBOUND':
@@ -85,7 +93,7 @@ elif st.session_state.mode == 'OUTBOUND':
             
         st.markdown('<div class="btn-kurang">', unsafe_allow_html=True)
         if st.button("CARI BARANG", use_container_width=True):
-            st.session_state.kolom = kolom; st.session_state.baris = baris; st.session_state.step = 2; st.rerun()
+            st.session_state.update({'kolom': kolom, 'baris': baris, 'step': 2}); st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('<div class="btn-batal">', unsafe_allow_html=True); st.write(""); st.button("🔙 Batal", on_click=reset_state, use_container_width=True); st.markdown('</div>', unsafe_allow_html=True)
 
@@ -105,9 +113,9 @@ elif st.session_state.mode == 'OUTBOUND':
             st.markdown('<div class="rak-info">', unsafe_allow_html=True)
             for (lot, prod), count in lot_counts.items():
                 if st.button(f"Lot: {lot}\n{prod}\n(Ada {count} Pallet)", use_container_width=True):
-                    st.session_state.lot_pilih = lot; st.session_state.step = 3; st.rerun()
+                    st.session_state.update({'lot_pilih': lot, 'step': 3}); st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('<div class="btn-batal">', unsafe_allow_html=True); st.write(""); st.button("🔙 Kembali", on_click=lambda: st.session_state.update(step=1), use_container_width=True); st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="btn-batal">', unsafe_allow_html=True); st.write(""); st.button("🔙 Kembali", on_click=lambda: st.session_state.update({'step': 1}), use_container_width=True); st.markdown('</div>', unsafe_allow_html=True)
 
     elif st.session_state.step == 3:
         st.header("3. Tarik & Audit Fisik")
@@ -120,19 +128,20 @@ elif st.session_state.mode == 'OUTBOUND':
             if st.button("➕", use_container_width=True): st.session_state.qty += 1; st.rerun()
             
         st.divider()
-        st.session_state.sisa_aktual = st.text_input("📝 (Opsional) Sisa Aktual Fisik Lot ini di Rak:")
+        sisa_input = st.text_input("📝 (Opsional) Sisa Aktual Fisik Lot ini di Rak:", value=st.session_state.sisa_aktual)
         
         st.markdown('<div class="btn-kurang">', unsafe_allow_html=True)
-        if st.button("Lanjut ➡️", use_container_width=True): st.session_state.step = 4; st.rerun()
+        if st.button("Lanjut ➡️", use_container_width=True): st.session_state.update({'sisa_aktual': sisa_input, 'step': 4}); st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('<div class="btn-batal">', unsafe_allow_html=True); st.write(""); st.button("🔙 Kembali", on_click=lambda: st.session_state.update(step=2), use_container_width=True); st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="btn-batal">', unsafe_allow_html=True); st.write(""); st.button("🔙 Kembali", on_click=lambda: st.session_state.update({'step': 2}), use_container_width=True); st.markdown('</div>', unsafe_allow_html=True)
 
     elif st.session_state.step == 4:
         st.header("4. Status Barang")
-        st.session_state.status_sisa = st.radio("Bagaimana status sisa tarikan ini?", ["Semua Muat ke Truk", "Sisa dikembalikan ke rak ini", "Sisa ditaruh di luar rak"])
+        status_input = st.radio("Bagaimana status sisa tarikan ini?", ["Semua Muat ke Truk", "Sisa dikembalikan ke rak ini", "Sisa ditaruh di luar rak"])
         
         st.markdown('<div class="btn-kurang">', unsafe_allow_html=True)
         if st.button("🚀 EKSEKUSI OUTBOUND", use_container_width=True):
+            st.session_state.status_sisa = status_input
             with st.spinner("Memotong stok..."):
                 doc_ref = db.collection(NAMA_DATABASE).document(f"Kolom_{st.session_state.kolom}")
                 ts = (datetime.utcnow() + timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S")
@@ -141,7 +150,7 @@ elif st.session_state.mode == 'OUTBOUND':
                 
                 sukses, pesan = tx_tarik_outbound(db.transaction(), doc_ref, st.session_state.baris, st.session_state.lot_pilih, st.session_state.qty, st.session_state.sisa_aktual, st.session_state.status_sisa, log_data, log_audit)
                 
-                if sukses: st.toast('Tarik Stok Berhasil!', icon='✅'); st.balloons(); time.sleep(1.5); reset_state(); st.rerun()
+                if sukses: st.toast('Tarik Stok Berhasil!', icon='✅'); time.sleep(1.5); reset_state(); st.rerun()
                 else: st.error(pesan)
         st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('<div class="btn-batal">', unsafe_allow_html=True); st.write(""); st.button("🔙 Kembali", on_click=lambda: st.session_state.update(step=3), use_container_width=True); st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="btn-batal">', unsafe_allow_html=True); st.write(""); st.button("🔙 Kembali", on_click=lambda: st.session_state.update({'step': 3}), use_container_width=True); st.markdown('</div>', unsafe_allow_html=True)
