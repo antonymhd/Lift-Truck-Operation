@@ -9,7 +9,7 @@ st.set_page_config(page_title="LTO - Outbound", page_icon="📤", layout="center
 
 st.markdown('''
 <style>
-    div.stButton > button { min-height: 70px !important; font-size: clamp(14px, 2vw, 18px) !important; font-weight: bold !important; border-radius: 8px !important; }
+    div.stButton > button { min-height: 60px !important; font-size: clamp(14px, 2vw, 16px) !important; font-weight: bold !important; border-radius: 8px !important; }
     .btn-kurang > div > button { background-color: #ffedd5 !important; border: 2px solid #f97316 !important; color: #9a3412 !important; }
     .btn-batal > div > button { background-color: #f1f5f9 !important; border: 2px solid #cbd5e1 !important; color: #475569 !important; }
 </style>
@@ -32,8 +32,17 @@ def init_firebase():
     return firestore.client()
 db = init_firebase()
 
+@st.cache_data(ttl=3600)
+def load_master_produk():
+    try:
+        try: df = pd.read_csv("Master_Produk.csv", sep=";")
+        except: df = pd.read_csv("Master_Produk.csv", sep=",")
+        df['Part Number Clean'] = df['Part Number'].astype(str).str.strip().str.upper()
+        return df
+    except: return pd.DataFrame()
+
 @firestore.transactional
-def tx_tarik_outbound(transaction, doc_ref, b_pilih, out_lot, out_qty, sisa_aktual, status_sisa, log_data, log_audit):
+def tx_tarik_outbound_audit(transaction, doc_ref, b_pilih, out_lot, qty_keluar, is_aktual, qty_penyesuaian, status_sisa, log_data, log_audit):
     snapshot = doc_ref.get(transaction=transaction)
     all_data = snapshot.to_dict().get('data', []) if snapshot.exists else []
     
@@ -41,29 +50,41 @@ def tx_tarik_outbound(transaction, doc_ref, b_pilih, out_lot, out_qty, sisa_aktu
     baris_actual = [d for d in all_data if float(d.get('Baris', 0)) == float(b_pilih) and str(d.get('Part Number', '')).strip() != '']
     
     lot_matches = sorted([d for d in baris_actual if str(d.get('Lot Number', '')).strip() == str(out_lot).strip()], key=lambda x: float(x.get('Pallet Ke', 0)))
-    if len(lot_matches) < out_qty: return False, f"Stok Lot {out_lot} di sistem hanya ada {len(lot_matches)} pallet. Tarikan ditolak agar tidak minus."
     
-    pallets_to_remove = lot_matches[:out_qty]
+    # Jika stok di lapangan tidak aktual, gunakan qty penyesuaian dari operator
+    effective_qty_to_remove = qty_penyesuaian if not is_aktual else qty_keluar
+    
+    if len(lot_matches) < effective_qty_to_remove: 
+        return False, f"Stok di sistem tidak cukup untuk jumlah penyesuaian tersebut (Sistem: {len(lot_matches)} pallet)."
+    
+    # Ambil pallet yang akan dikeluarkan
+    pallets_to_remove = lot_matches[:effective_qty_to_remove]
     baris_remaining = [d for d in baris_actual if d not in pallets_to_remove]
     
     transaction.set(doc_ref, {'data': data_luar + baris_remaining})
     db.collection(DB_LOG_MUTASI).add(log_data)
     
-    sistem_sisa = len(lot_matches) - out_qty
-    if sisa_aktual != "" and int(sisa_aktual) != sistem_sisa:
-        log_audit['Selisih'] = int(sisa_aktual) - sistem_sisa
+    # Jika tidak aktual, catat log audit selisih ke backend
+    if not is_aktual:
+        selisih = qty_penyesuaian - qty_keluar
+        log_audit['Keterangan'] = f"Audit Selisih Lapangan. Sistem mencatat keluar {qty_keluar}, aktual disesuaikan {qty_penyesuaian} (Selisih: {selisih})"
         db.collection(DB_LOG_MUTASI).add(log_audit)
         
-    return True, "Barang berhasil ditarik!"
+    return True, "Barang berhasil ditarik dan disesuaikan!"
 
-st.markdown("<h2 style='text-align: center;'>📤 LTO - Ambil Barang (Outbound)</h2>", unsafe_allow_html=True)
-st.progress(st.session_state.step / 2, text=f"Langkah {st.session_state.step} dari 2")
+st.markdown("<h2 style='text-align: center;'>📤 LTO - Outbound & Audit Lapangan</h2>", unsafe_allow_html=True)
+progress_val = min(st.session_state.step / 2.0, 1.0)
+st.progress(progress_val, text=f"Langkah {st.session_state.step} dari 2")
 
 if st.session_state.step == 1:
-    st.header("1. Titik Jemput Barang")
+    st.header("1. Input Lokasi Rak Tujuan")
     c1, c2 = st.columns(2)
-    with c1: kolom = st.selectbox("Blok", ['A', 'B', 'C', 'D', 'E', 'F', 'G'], index=['A', 'B', 'C', 'D', 'E', 'F', 'G'].index(st.session_state.kolom))
-    with c2: baris = st.number_input("Nomor Rak", min_value=1, max_value=28, value=st.session_state.baris)
+    with c1: 
+        blok_list = ['A', 'B', 'C', 'D', 'E', 'F', 'G']
+        safe_idx = blok_list.index(st.session_state.kolom) if st.session_state.kolom in blok_list else 0
+        kolom = st.selectbox("Blok", blok_list, index=safe_idx)
+    with c2: 
+        baris = st.number_input("Nomor Rak", min_value=1, max_value=28, value=st.session_state.baris)
         
     st.markdown('<div class="btn-kurang">', unsafe_allow_html=True)
     if st.button("CARI STOK DI RAK INI ➡️", use_container_width=True): 
@@ -72,7 +93,7 @@ if st.session_state.step == 1:
     st.markdown('</div>', unsafe_allow_html=True)
 
 elif st.session_state.step == 2:
-    st.header(f"2. Eksekusi Tarik ➔ {st.session_state.kolom}-{st.session_state.baris}")
+    st.header(f"2. Pilih Item, Lot & Audit Fisik ➔ {st.session_state.kolom}-{st.session_state.baris}")
     
     doc = db.collection(NAMA_DATABASE).document(f"Kolom_{st.session_state.kolom}").get()
     all_k_data = doc.to_dict().get('data', []) if doc.exists else []
@@ -85,41 +106,79 @@ elif st.session_state.step == 2:
         lot_counts[(l, p)] = lot_counts.get((l, p), 0) + 1
         
     if not lot_counts: 
-        st.warning("⚠️ Rak ini KOSONG secara sistem! Jika di lapangan ada barang, berarti terjadi Inbound tanpa input sistem sebelumnya.")
+        st.warning("⚠️ Rak ini KOSONG secara sistem! Silakan kembali dan pastikan lokasi benar.")
+        if st.button("🔙 Kembali", use_container_width=True):
+            st.session_state.step = 1; st.rerun()
     else:
-        opsi_lot = [f"Lot: {l} | {p} (Tersedia: {c} Pallet)" for (l, p), c in lot_counts.items()]
-        pilihan_lot_teks = st.radio("Pilih Lot yang akan ditarik:", opsi_lot)
+        opsi_lot = [f"Lot: {l} | {p} (Sistem: {c} Pallet)" for (l, p), c in lot_counts.items()]
+        pilihan_lot_teks = st.selectbox("Pilih Item & Lot yang akan ditarik:", opsi_lot)
+        
+        # Ekstrak data lot terpilih
         lot_terpilih = pilihan_lot_teks.split(" | ")[0].replace("Lot: ", "")
+        max_stok_sistem = int(pilihan_lot_teks.split("Sistem: ")[1].split(" Pallet")[0])
         
         st.divider()
-        st.write("Jumlah Tarikan (Pallet):")
+        st.write("Jumlah Rencana Pengeluaran (Delivery):")
         n1, n2, n3 = st.columns([1, 1.5, 1])
         with n1:
             if st.button("➖", use_container_width=True) and st.session_state.qty > 1: st.session_state.qty -= 1; st.rerun()
-        with n2: st.markdown(f"<h2 style='text-align: center; margin:0;'>{st.session_state.qty}</h2>", unsafe_allow_html=True)
+        with n2: st.markdown(f"<h2 style='text-align: center; margin:0;'>{st.session_state.qty} Pallet</h2>", unsafe_allow_html=True)
         with n3:
             if st.button("➕", use_container_width=True): st.session_state.qty += 1; st.rerun()
-        
+            
         st.divider()
-        status_input = st.radio("Status Sisa:", ["Semua Muat ke Truk", "Sisa dikembalikan ke rak ini", "Sisa ditaruh di luar rak"], horizontal=True)
-        sisa_input = st.text_input("📝 Audit Fisik (Opsional - Input sisa fisik pallet di rak):")
+        st.subheader("🔍 Audit Kecocokan Stok Lapangan")
+        is_aktual = st.checkbox("✅ Stok fisik di lapangan sesuai dengan data sistem", value=True)
+        
+        qty_penyesuaian = st.session_state.qty
+        if not is_aktual:
+            st.warning("⚠️ Karena stok tidak aktual, masukkan jumlah riil yang ditarik/disesuaikan dari lapangan:")
+            qty_penyesuaian = st.number_input("Jumlah Riil Aktual yang Ditarik:", min_value=1, value=st.session_state.qty)
+            
+        st.divider()
+        status_input = st.radio("Status Sisa di Rak:", ["Semua Muat ke Truk", "Sisa dikembalikan ke rak ini", "Sisa ditaruh di luar rak"], horizontal=True)
         
         st.markdown('<div class="btn-kurang">', unsafe_allow_html=True)
-        if st.button("🚀 EKSEKUSI OUTBOUND", use_container_width=True):
-            with st.spinner("Memotong stok..."):
+        if st.button("🚀 EKSEKUSI OUTBOUND & AUDIT", use_container_width=True):
+            with st.spinner("Memproses pemotongan stok & pencatatan backend..."):
                 doc_ref = db.collection(NAMA_DATABASE).document(f"Kolom_{st.session_state.kolom}")
                 ts = (datetime.utcnow() + timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S")
-                log_data = {"Waktu Transaksi": ts, "Jenis Transaksi": "OUTBOUND - Delivery", "Lokasi Rak": f"{st.session_state.kolom}-{st.session_state.baris}", "No Lot": lot_terpilih, "Mutasi Pallet": -float(st.session_state.qty), "Keterangan": status_input, "Kolom": st.session_state.kolom, "Timestamp_System": firestore.SERVER_TIMESTAMP}
-                log_audit = {"Waktu Transaksi": ts, "Jenis Transaksi": "AUDIT SELISIH (OUTBOUND)", "Lokasi Rak": f"{st.session_state.kolom}-{st.session_state.baris}", "No Lot": lot_terpilih, "Mutasi Pallet": 0.0, "Keterangan": "Terjadi selisih pelaporan fisik.", "Timestamp_System": firestore.SERVER_TIMESTAMP}
                 
-                sukses, pesan = tx_tarik_outbound(db.transaction(), doc_ref, st.session_state.baris, lot_terpilih, st.session_state.qty, sisa_input, status_input, log_data, log_audit)
+                log_data = {
+                    "Waktu Transaksi": ts, 
+                    "Jenis Transaksi": "OUTBOUND - Delivery", 
+                    "Lokasi Rak": f"{st.session_state.kolom}-{st.session_state.baris}", 
+                    "No Lot": lot_terpilih, 
+                    "Mutasi Pallet": -float(qty_penyesuaian), 
+                    "Keterangan": f"{status_input} | Aktual: {is_aktual}", 
+                    "Kolom": st.session_state.kolom, 
+                    "Timestamp_System": firestore.SERVER_TIMESTAMP
+                }
+                
+                log_audit = {
+                    "Waktu Transaksi": ts, 
+                    "Jenis Transaksi": "AUDIT SELISIH (OUTBOUND)", 
+                    "Lokasi Rak": f"{st.session_state.kolom}-{st.session_state.baris}", 
+                    "No Lot": lot_terpilih, 
+                    "Mutasi Pallet": 0.0, 
+                    "Keterangan": "", 
+                    "Timestamp_System": firestore.SERVER_TIMESTAMP
+                }
+                
+                sukses, pesan = tx_tarik_outbound_audit(
+                    db.transaction(), doc_ref, st.session_state.baris, 
+                    lot_terpilih, st.session_state.qty, is_aktual, qty_penyesuaian, 
+                    status_input, log_data, log_audit
+                )
                 
                 if sukses: 
-                    st.toast('Tarik Stok Berhasil!', icon='✅')
+                    st.toast('Outbound Berhasil & Tercatat di Backend!', icon='✅')
                     time.sleep(1.5)
                     reset_state()
                     st.rerun()
-                else: st.error(pesan)
+                else: 
+                    st.error(pesan)
         st.markdown('</div>', unsafe_allow_html=True)
-
-    st.write(""); st.button("🔙 Batal & Kembali", on_click=lambda: st.session_state.update({'step': 1}), use_container_width=True)
+        
+        st.write("")
+        st.button("🔙 Batal / Ganti Rak", on_click=lambda: st.session_state.update({'step': 1}), use_container_width=True)
