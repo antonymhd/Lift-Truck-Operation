@@ -72,7 +72,12 @@ def tx_tarik_outbound_audit(transaction, doc_ref, b_pilih, out_lot, qty_keluar, 
         
     return True, "Barang berhasil ditarik dan disesuaikan!"
 
+# ==========================================================
+# UI UTAMA LTO
+# ==========================================================
 st.markdown("<h2 style='text-align: center;'>📤 LTO - Outbound & Audit Lapangan</h2>", unsafe_allow_html=True)
+st.caption(f"<p style='text-align: center;'>Terhubung ke database: <b>{NAMA_DATABASE}</b></p>", unsafe_allow_html=True)
+
 progress_val = min(st.session_state.step / 2.0, 1.0)
 st.progress(progress_val, text=f"Langkah {st.session_state.step} dari 2")
 
