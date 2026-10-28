@@ -13,7 +13,6 @@ st.markdown('''
     .btn-kurang > div > button { background-color: #ffedd5 !important; border: 2px solid #f97316 !important; color: #9a3412 !important; }
     .btn-batal > div > button { background-color: #f1f5f9 !important; border: 2px solid #cbd5e1 !important; color: #475569 !important; }
 </style>
-''', unsafe_allow_html=True)
 
 if 'step' not in st.session_state:
     st.session_state.update({'step': 1, 'kolom': 'A', 'baris': 1, 'qty': 1})
