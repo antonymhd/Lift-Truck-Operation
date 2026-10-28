@@ -128,7 +128,12 @@ def tx_simpan_inbound(transaction, doc_ref, b_pilih, arah, in_produk, in_part, i
     db.collection(DB_LOG_MUTASI).add(log_data)
     return True, "Sukses disimpan!"
 
+# ==========================================================
+# UI UTAMA LTI
+# ==========================================================
 st.markdown("<h2 style='text-align: center;'>📥 LTI - Putaway (Inbound)</h2>", unsafe_allow_html=True)
+st.caption(f"<p style='text-align: center;'>Terhubung ke database: <b>{NAMA_DATABASE}</b></p>", unsafe_allow_html=True)
+
 progress_val = min(st.session_state.step / 2.0, 1.0)
 st.progress(progress_val, text=f"Langkah {st.session_state.step} dari 2")
 
@@ -176,7 +181,6 @@ elif st.session_state.step == 2:
     
     if st.session_state.mode_pilih == "Rekomendasi Rak Otomatis":
         df_rak = get_all_rack_data()
-        # Hitung slot setara pallet
         simulasi_qty = st.session_state.pallets + (1 if (st.session_state.box_sak > 0 or st.session_state.eceran > 0) else 0)
         rek_list = get_recommendations(df_rak, st.session_state.part_num, max(1, simulasi_qty))
         
@@ -190,7 +194,10 @@ elif st.session_state.step == 2:
     else:
         st.info("✍️ Silakan tentukan lokasi rak tujuan secara manual di bawah ini:")
         c1, c2, c3 = st.columns(3)
-        with c1: kolom = st.selectbox("Blok", ['A', 'B', 'C', 'D', 'E', 'F', 'G'])
+        with c1: 
+            blok_list = ['A', 'B', 'C', 'D', 'E', 'F', 'G']
+            safe_idx = blok_list.index(st.session_state.kolom) if st.session_state.kolom in blok_list else 0
+            kolom = st.selectbox("Blok", blok_list, index=safe_idx)
         with c2: baris = st.number_input("Nomor Rak", min_value=1, max_value=28, value=1)
         with c3: arah = st.radio("Jalur", ["Belakang", "Depan"])
 
