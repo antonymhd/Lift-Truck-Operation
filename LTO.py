@@ -8,6 +8,7 @@ import time
 st.set_page_config(page_title="LTO - Outbound", page_icon="📤", layout="centered")
 
 st.markdown('''
+st.caption(f"<p style='text-align: center;'>Terhubung ke database: <b>{NAMA_DATABASE}</b></p>", unsafe_allow_html=True)
 <style>
     div.stButton > button { min-height: 60px !important; font-size: clamp(14px, 2vw, 16px) !important; font-weight: bold !important; border-radius: 8px !important; }
     .btn-kurang > div > button { background-color: #ffedd5 !important; border: 2px solid #f97316 !important; color: #9a3412 !important; }
