@@ -14,7 +14,6 @@ st.markdown('''
     .btn-batal > div > button { background-color: #f1f5f9 !important; border: 2px solid #cbd5e1 !important; color: #475569 !important; }
 </style>
 ''', unsafe_allow_html=True)
-st.caption(f"<p style='text-align: center;'>Terhubung ke database: <b>{NAMA_DATABASE}</b></p>", unsafe_allow_html=True)
 
 if 'step' not in st.session_state:
     st.session_state.update({'step': 1, 'kolom': 'A', 'baris': 1, 'qty': 1})
